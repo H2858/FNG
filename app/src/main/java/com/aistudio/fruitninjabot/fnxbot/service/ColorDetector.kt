@@ -17,7 +17,7 @@ data class ColorProfile(
     val maxHue: Float,
     val minSat: Float,
     val maxSat: Float = 1.0f,
-    val minVal: Float = 0.35f,
+    val minVal: Float = 0.30f,
     val maxVal: Float = 1.0f
 )
 
@@ -40,22 +40,24 @@ data class DetectionResult(
 
 object ColorDetector {
 
+    // High tolerance Fruit HSV color profiles for Fruit Ninja
     private val fruitProfiles = listOf(
-        // Watermelon / Strawberry / Apple Red (wraps around 0/360)
-        ColorProfile("Red_Low", 0f, 15f, 0.45f, 1.0f, 0.38f, 1.0f),
-        ColorProfile("Red_High", 345f, 360f, 0.45f, 1.0f, 0.38f, 1.0f),
-        // Orange (strict saturation to filter wood dojo)
-        ColorProfile("Orange", 18f, 42f, 0.55f, 1.0f, 0.42f, 1.0f),
+        // Watermelon / Strawberry / Apple Red (wraps around 0 / 360)
+        ColorProfile("Red_Low", 0f, 16f, 0.42f, 1.0f, 0.32f, 1.0f),
+        ColorProfile("Red_High", 342f, 360f, 0.42f, 1.0f, 0.32f, 1.0f),
+        // Orange (strict saturation to filter out warm wooden background)
+        ColorProfile("Orange", 18f, 44f, 0.58f, 1.0f, 0.40f, 1.0f),
         // Banana / Lemon Yellow
-        ColorProfile("Yellow", 45f, 68f, 0.42f, 1.0f, 0.45f, 1.0f),
-        // Kiwi / Lime / Green Apple
-        ColorProfile("Green", 72f, 160f, 0.38f, 1.0f, 0.35f, 1.0f),
-        // Dragonfruit / Passionfruit Magenta
-        ColorProfile("Magenta", 280f, 344f, 0.38f, 1.0f, 0.38f, 1.0f)
+        ColorProfile("Yellow", 45f, 70f, 0.38f, 1.0f, 0.38f, 1.0f),
+        // Kiwi / Lime / Green Apple / Coconut Shell Green
+        ColorProfile("Green", 72f, 165f, 0.32f, 1.0f, 0.30f, 1.0f),
+        // Dragonfruit / Passionfruit / Plum Magenta & Purple
+        ColorProfile("Magenta", 270f, 340f, 0.35f, 1.0f, 0.32f, 1.0f)
     )
 
     /**
-     * Analyzes a downscaled screen bitmap using fast HSV spatial grid sampling.
+     * Analyzes a downscaled screen bitmap using high-performance spatial sampling & HSV filtering.
+     * Coordinates are mapped accurately back to actual device screen dimensions.
      */
     fun analyzeFrame(
         bitmap: Bitmap,
@@ -69,12 +71,14 @@ object ColorDetector {
             return DetectionResult(emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
         }
 
+        // Accurate screen coordinate scaling factors
         val scaleX = screenWidth.toFloat() / width.toFloat()
         val scaleY = screenHeight.toFloat() / height.toFloat()
 
-        val step = max(4, width / 90) // fast grid step
-        val topLimit = (height * config.detectionRegionTop).toInt()
-        val bottomLimit = (height * config.detectionRegionBottom).toInt()
+        // Adaptive spatial sampling grid step based on resolution
+        val step = max(3, width / 95)
+        val topLimit = (height * config.detectionRegionTop).toInt().coerceIn(0, height - 1)
+        val bottomLimit = (height * config.detectionRegionBottom).toInt().coerceIn(topLimit + 1, height)
 
         val hsv = FloatArray(3)
         val rawFruitPoints = mutableListOf<Triple<Float, Float, String>>()
@@ -90,7 +94,7 @@ object ColorDetector {
             for (x in step until (width - step) step step) {
                 val pixel = pixels[rowOffset + x]
                 val alpha = (pixel ushr 24) and 0xFF
-                if (alpha < 100) continue
+                if (alpha < 120) continue
 
                 val r = (pixel ushr 16) and 0xFF
                 val g = (pixel ushr 8) and 0xFF
@@ -101,28 +105,35 @@ object ColorDetector {
                 val sat = hsv[1]
                 val value = hsv[2]
 
-                // Check for Bomb / Obstacle (dark metallic spheres)
-                if (value < 0.15f || (r < 35 && g < 35 && b < 35)) {
+                // 1. Check for Bomb / Obstacle (dark metallic spheres with low luminance)
+                if (value < 0.14f || (r < 32 && g < 32 && b < 32 && value < 0.25f)) {
                     rawBombPoints.add(x.toFloat() to y.toFloat())
                     continue
                 }
 
-                // Check for Ad Close "X" button in top corners (white/high brightness button in corners)
-                if (config.autoSkipAds && y < height * 0.18f && (x < width * 0.22f || x > width * 0.78f)) {
-                    if (value > 0.90f && sat < 0.12f) {
+                // 2. Strict Dojo Wood Background Masking
+                // Brown wood texture typically has Hue 18°..45°, low-to-medium Saturation (0.15..0.52), Value 0.15..0.60
+                val isWoodDojo = (hue in 18f..46f) && (sat < 0.54f) && (value < 0.65f)
+                if (isWoodDojo) {
+                    continue
+                }
+
+                // 3. Ad Skip "X" button detection (near top corners with high luminance and low saturation)
+                if (config.autoSkipAds && y < height * 0.20f && (x < width * 0.22f || x > width * 0.78f)) {
+                    if (value > 0.88f && sat < 0.15f) {
                         rawAdPoints.add(x.toFloat() to y.toFloat())
                         continue
                     }
                 }
 
-                // Check for Lobby Play Fruit in center-lower zone
-                if (config.autoStartGame && y > height * 0.55f && y < height * 0.85f && x > width * 0.28f && x < width * 0.72f) {
-                    if ((hue in 75f..150f || hue in 345f..360f || hue in 0f..15f) && sat > 0.50f && value > 0.45f) {
+                // 4. Lobby Game Start Fruit detection (center-lower arena zone)
+                if (config.autoStartGame && y > height * 0.50f && y < height * 0.85f && x > width * 0.25f && x < width * 0.75f) {
+                    if ((hue in 70f..155f || hue in 340f..360f || hue in 0f..18f) && sat > 0.48f && value > 0.40f) {
                         rawMenuPoints.add(x.toFloat() to y.toFloat())
                     }
                 }
 
-                // Check for Fruit Profiles
+                // 5. Match active fruit color profiles
                 for (profile in fruitProfiles) {
                     if (profile.name.startsWith("Red") && !config.activeFruitColors.contains("Red")) continue
                     if (profile.name == "Orange" && !config.activeFruitColors.contains("Orange")) continue
@@ -134,46 +145,47 @@ object ColorDetector {
                         sat in profile.minSat..profile.maxSat &&
                         value in profile.minVal..profile.maxVal
                     ) {
-                        rawFruitPoints.add(Triple(x.toFloat(), y.toFloat(), profile.name))
+                        val label = if (profile.name.startsWith("Red")) "Red" else profile.name
+                        rawFruitPoints.add(Triple(x.toFloat(), y.toFloat(), label))
                         break
                     }
                 }
             }
         }
 
-        // Cluster raw points into distinct fruit targets
+        // Cluster raw points into distinct fruit targets scaled to screen coordinates
         val clusteredFruits = clusterPoints(rawFruitPoints, clusterRadius = step * 3.5f)
             .map { (x, y, colorType) ->
                 FruitTarget(
-                    x = x * scaleX,
-                    y = y * scaleY,
+                    x = (x * scaleX).coerceIn(20f, screenWidth - 20f),
+                    y = (y * scaleY).coerceIn(20f, screenHeight - 20f),
                     radius = 55f,
                     colorType = colorType,
                     isBomb = false
                 )
             }
 
-        // Cluster bombs
+        // Cluster bombs scaled to screen coordinates
         val clusteredBombs = clusterSimplePoints(rawBombPoints, clusterRadius = step * 3.0f)
             .map { (x, y) ->
                 FruitTarget(
-                    x = x * scaleX,
-                    y = y * scaleY,
+                    x = (x * scaleX).coerceIn(20f, screenWidth - 20f),
+                    y = (y * scaleY).coerceIn(20f, screenHeight - 20f),
                     radius = 70f,
                     colorType = "Bomb",
                     isBomb = true
                 )
             }
 
-        // Ad Skip points
+        // Ad Skip points scaled to screen coordinates
         val adSkips = clusterSimplePoints(rawAdPoints, clusterRadius = step * 4f)
             .map { PointF(it.first * scaleX, it.second * scaleY) }
 
-        // Menu Start points
+        // Menu Start points scaled to screen coordinates
         val menuActions = clusterSimplePoints(rawMenuPoints, clusterRadius = step * 4f)
             .map { PointF(it.first * scaleX, it.second * scaleY) }
 
-        // Calculate safe slice trajectories
+        // Compute slash trajectories based on user configured strategy
         val trajectories = calculateTrajectories(
             fruits = clusteredFruits,
             bombs = clusteredBombs,
@@ -217,7 +229,7 @@ object ColorDetector {
                 }
             }
 
-            if (count >= 3) { // Filter out isolated noise pixels
+            if (count >= 2) { // Low noise threshold to capture fast-moving fruits
                 clusters.add(Triple(sumX / count, sumY / count, colorType))
             }
         }
@@ -249,7 +261,7 @@ object ColorDetector {
                 }
             }
 
-            if (count >= 4) {
+            if (count >= 3) {
                 clusters.add(sumX / count to sumY / count)
             }
         }
@@ -266,7 +278,7 @@ object ColorDetector {
         val trajectories = mutableListOf<SliceTrajectory>()
         val safeBombRadius = 140f
 
-        // Filter fruits that are too dangerously close to bombs
+        // Filter fruits safely away from bombs if avoidance is enabled
         val safeFruits = fruits.filter { fruit ->
             if (!config.bombAvoidance) return@filter true
             bombs.none { bomb -> hypot(fruit.x - bomb.x, fruit.y - bomb.y) < safeBombRadius }
@@ -278,7 +290,7 @@ object ColorDetector {
             SliceMode.INSTANT_SLASH -> {
                 for (fruit in safeFruits) {
                     val halfLen = config.minSliceLength / 2f
-                    // 45 degree upward cut
+                    // 45-degree clean diagonal swipe
                     val startX = (fruit.x - halfLen * 0.7f).coerceIn(40f, screenWidth - 40f)
                     val startY = (fruit.y + halfLen * 0.7f).coerceIn(40f, screenHeight - 40f)
                     val endX = (fruit.x + halfLen * 0.7f).coerceIn(40f, screenWidth - 40f)
@@ -289,7 +301,7 @@ object ColorDetector {
             }
 
             SliceMode.COMBO_SLASH -> {
-                // Connect nearby fruits in ascending chains
+                // Connect closest fruits into single swift combo streaks
                 val sortedFruits = safeFruits.sortedBy { it.x }
                 var i = 0
                 while (i < sortedFruits.size) {
@@ -297,8 +309,7 @@ object ColorDetector {
                     if (i + 1 < sortedFruits.size) {
                         val next = sortedFruits[i + 1]
                         val dist = hypot(current.x - next.x, current.y - next.y)
-                        if (dist < 480f) {
-                            // Check if path intersects any bomb
+                        if (dist < 520f) {
                             val isSafeCombo = bombs.none { b ->
                                 isPointNearSegment(b.x, b.y, current.x, current.y, next.x, next.y, safeBombRadius)
                             }
@@ -341,7 +352,6 @@ object ColorDetector {
             }
 
             SliceMode.MULTI_SWEEP -> {
-                // Cross sweeping slashes
                 for (fruit in safeFruits) {
                     val halfLen = config.maxSliceLength / 2f
                     trajectories.add(
@@ -358,7 +368,6 @@ object ColorDetector {
 
             SliceMode.BOMB_SAFE_SLASH -> {
                 for (fruit in safeFruits) {
-                    // Pick the perpendicular angle farthest from the nearest bomb
                     var bestAngle = -Math.PI.toFloat() / 4f
                     val nearestBomb = bombs.minByOrNull { hypot(fruit.x - it.x, fruit.y - it.y) }
                     if (nearestBomb != null) {

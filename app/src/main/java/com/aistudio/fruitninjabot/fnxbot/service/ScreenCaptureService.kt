@@ -105,7 +105,7 @@ class ScreenCaptureService : Service() {
                 setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            manager?.createNotificationChannel(channel)
         }
     }
 
@@ -145,15 +145,17 @@ class ScreenCaptureService : Service() {
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealMetrics(metrics)
-        screenWidth = metrics.widthPixels
-        screenHeight = metrics.heightPixels
+        screenWidth = max(metrics.widthPixels, 320)
+        screenHeight = max(metrics.heightPixels, 480)
         screenDensity = metrics.densityDpi
     }
 
     private fun startBackgroundThread() {
-        backgroundThread = HandlerThread("VisionCaptureThread", Process.THREAD_PRIORITY_URGENT_DISPLAY).apply {
-            start()
-            backgroundHandler = Handler(looper)
+        if (backgroundThread == null) {
+            backgroundThread = HandlerThread("VisionCaptureThread", Process.THREAD_PRIORITY_URGENT_DISPLAY).apply {
+                start()
+                backgroundHandler = Handler(looper)
+            }
         }
     }
 
@@ -171,7 +173,7 @@ class ScreenCaptureService : Service() {
 
         // Downscale capture surface to 480px width for low latency & memory safety
         val captureWidth = 480
-        val captureHeight = (screenHeight.toFloat() / screenWidth.toFloat() * captureWidth).toInt()
+        val captureHeight = (screenHeight.toFloat() / screenWidth.toFloat() * captureWidth).toInt().coerceAtLeast(320)
 
         imageReader = ImageReader.newInstance(
             captureWidth,
@@ -223,29 +225,37 @@ class ScreenCaptureService : Service() {
 
             val startTime = System.currentTimeMillis()
 
-            // Row padding & stride pitch correction
+            // 1. Extract planes and calculate row stride / padding
             val planes = image.planes
-            val buffer = planes[0].buffer
-            val pixelStride = planes[0].pixelStride
-            val rowStride = planes[0].rowStride
-            val rowPadding = rowStride - pixelStride * captureWidth
+            val plane = planes[0]
+            val buffer = plane.buffer
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val rowPadding = max(0, rowStride - pixelStride * captureWidth)
 
+            // 2. Stride-aware Bitmap extraction
+            val strideWidth = if (pixelStride > 0) captureWidth + (rowPadding / pixelStride) else captureWidth
             val rawBitmap = Bitmap.createBitmap(
-                captureWidth + rowPadding / pixelStride,
+                strideWidth,
                 captureHeight,
                 Bitmap.Config.ARGB_8888
             )
             rawBitmap.copyPixelsFromBuffer(buffer)
+            
+            // Release hardware Image immediately to keep buffer pool free
             image.close()
             image = null
 
-            val cleanBitmap = if (rowPadding > 0) {
-                Bitmap.createBitmap(rawBitmap, 0, 0, captureWidth, captureHeight)
+            // 3. Crop out GPU stride padding if present
+            val cleanBitmap = if (rowPadding > 0 && strideWidth > captureWidth) {
+                val cropped = Bitmap.createBitmap(rawBitmap, 0, 0, captureWidth, captureHeight)
+                rawBitmap.recycle()
+                cropped
             } else {
                 rawBitmap
             }
 
-            // Execute vision detection
+            // 4. Execute vision detection algorithm
             val result = ColorDetector.analyzeFrame(
                 bitmap = cleanBitmap,
                 config = config,
@@ -253,7 +263,8 @@ class ScreenCaptureService : Service() {
                 screenHeight = screenHeight
             )
 
-            val latency = System.currentTimeMillis() - startTime
+            // 5. Update latency and metrics immediately for HUD overlay
+            val latency = max(1L, System.currentTimeMillis() - startTime)
             lastProcessTime = System.currentTimeMillis()
             BotStateController.setVisionLatency(latency)
 
@@ -261,10 +272,10 @@ class ScreenCaptureService : Service() {
                 BotStateController.incrementDetectedCount(result.fruits.size)
             }
 
-            // Dispatch gestures if AccessibilityService is active
+            // 6. Dispatch gestures if AccessibilityService is active
             val touchService = AutoTouchService.instance
             if (touchService != null) {
-                // 1. Handle ad skipping
+                // Handle ad skipping
                 if (result.adSkips.isNotEmpty() && config.autoSkipAds) {
                     val adPoint = result.adSkips.first()
                     touchService.performClick(adPoint.x, adPoint.y) {
@@ -273,7 +284,7 @@ class ScreenCaptureService : Service() {
                     }
                 }
 
-                // 2. Handle auto start menu buttons
+                // Handle auto start menu buttons
                 if (result.fruits.isEmpty() && result.menuActions.isNotEmpty() && config.autoStartGame) {
                     val menuPoint = result.menuActions.first()
                     touchService.performSwipe(
@@ -288,7 +299,7 @@ class ScreenCaptureService : Service() {
                     }
                 }
 
-                // 3. Execute slice trajectories
+                // Execute slice trajectories
                 for (traj in result.trajectories) {
                     touchService.performSwipe(
                         startX = traj.startX,
@@ -300,13 +311,10 @@ class ScreenCaptureService : Service() {
                 }
             }
 
-            if (cleanBitmap != rawBitmap) {
-                rawBitmap.recycle()
-            }
             cleanBitmap.recycle()
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error in image processing loop: ${e.message}", e)
+            Log.e(TAG, "Error in vision processing loop: ${e.message}", e)
         } finally {
             image?.close()
             isProcessingFrame.set(false)
