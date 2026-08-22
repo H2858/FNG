@@ -10,20 +10,41 @@ enum class BotRunState {
     SLASHING
 }
 
-enum class SlashPattern(val label: String, val description: String) {
-    RANDOM_CHAOS("Random Multi-Angle", "Unpredictable rapid slashes across multiple diagonal & linear angles"),
-    CROSS_GRID("Cross Slice Grid", "Alternating X-pattern and cross-cuts covering the fruit trajectory apex"),
-    DUAL_SWEEP("Dual Sweep", "Rapid alternating left-to-right and right-to-left screen cuts"),
-    WHIRLWIND("Whirlwind Vortex", "Continuous rotating multi-point slashes around the central arena")
+enum class SlashPattern(val label: String, val shortName: String, val description: String) {
+    INFINITY_WAVE(
+        "Infinity Wave (∞)",
+        "Infinity",
+        "Continuous 16-segment connected looping path in upper 50% safe zone to bypass bottom bombs"
+    ),
+    FULL_SWEEP(
+        "Edge-to-Edge Sweeps",
+        "Sweeps",
+        "Ultra-fast horizontal slashes extending from X=5% to X=95% of screen width"
+    ),
+    Z_GRID(
+        "Z-Grid Blitz",
+        "Z-Grid",
+        "Continuous 3-point Z-shaped cuts spanning upper screen coordinates"
+    ),
+    DOUBLE_CROSS(
+        "Double Cross-Cut (X)",
+        "X-Cross",
+        "Intersecting diagonal slashes covering the fruit trajectory apex"
+    ),
+    WHIRLWIND(
+        "Whirlwind Vortex",
+        "Vortex",
+        "High-velocity rotating multi-point circular slashes in mid-upper arena"
+    )
 }
 
 data class BotConfig(
-    val swipeDurationMs: Long = 40L,
-    val delayBetweenSwipesMs: Long = 75L,
-    val pattern: SlashPattern = SlashPattern.RANDOM_CHAOS,
+    val swipeDurationMs: Long = 35L,
+    val delayBetweenSwipesMs: Long = 40L,
+    val pattern: SlashPattern = SlashPattern.INFINITY_WAVE,
     val arenaBoundsRatio: Float = 0.70f,
-    val minSlashLength: Float = 260f,
-    val maxSlashLength: Float = 620f
+    val minSlashLength: Float = 280f,
+    val maxSlashLength: Float = 640f
 )
 
 /**

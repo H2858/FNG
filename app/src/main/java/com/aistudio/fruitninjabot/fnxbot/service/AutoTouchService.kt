@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -47,7 +48,6 @@ class AutoTouchService : AccessibilityService() {
     private var screenWidth = 1080
     private var screenHeight = 1920
 
-    private var lastSlashTimestamp = 0L
     private var slashCountInWindow = 0
     private var windowStartTimestamp = 0L
 
@@ -56,12 +56,12 @@ class AutoTouchService : AccessibilityService() {
         instance = this
         _isServiceConnected.value = true
         updateScreenDimensions()
-        BotStateController.addLog("AutoTouchService Accessibility engine active & ready.")
+        BotStateController.addLog("AutoTouchService ready. Safe-zone gesture engine active.")
         Log.d(TAG, "AutoTouchService connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Accessibility event monitoring hook
+        // Unused - pure gesture dispatching
     }
 
     override fun onInterrupt() {
@@ -91,17 +91,17 @@ class AutoTouchService : AccessibilityService() {
             val metrics = DisplayMetrics()
             @Suppress("DEPRECATION")
             wm.defaultDisplay.getRealMetrics(metrics)
-            screenWidth = max(metrics.widthPixels, 360)
-            screenHeight = max(metrics.heightPixels, 640)
+            screenWidth = max(metrics.widthPixels, 480)
+            screenHeight = max(metrics.heightPixels, 800)
         } catch (e: Exception) {
             val dm = resources.displayMetrics
-            screenWidth = max(dm.widthPixels, 360)
-            screenHeight = max(dm.heightPixels, 640)
+            screenWidth = max(dm.widthPixels, 480)
+            screenHeight = max(dm.heightPixels, 800)
         }
     }
 
     /**
-     * Starts continuous high-frequency auto slashing gestures.
+     * Starts continuous high-frequency auto slashing gestures based on active pattern.
      */
     fun startAutoSlash() {
         if (isSlashingActive.getAndSet(true)) {
@@ -116,13 +116,14 @@ class AutoTouchService : AccessibilityService() {
         slashingJob = serviceScope.launch {
             while (isActive && isSlashingActive.get()) {
                 val config = BotStateController.config.value
-                val gesture = generateNextSlashGesture(config)
+                val gesture = generatePatternGesture(config)
 
                 dispatchGesture(gesture, object : GestureResultCallback() {
                     override fun onCompleted(gestureDescription: GestureDescription?) {
                         super.onCompleted(gestureDescription)
-                        BotStateController.incrementSlashCount(1)
-                        slashCountInWindow++
+                        val strokes = gestureDescription?.strokeCount ?: 1
+                        BotStateController.incrementSlashCount(strokes)
+                        slashCountInWindow += strokes
 
                         val now = System.currentTimeMillis()
                         val elapsed = now - windowStartTimestamp
@@ -136,12 +137,11 @@ class AutoTouchService : AccessibilityService() {
 
                     override fun onCancelled(gestureDescription: GestureDescription?) {
                         super.onCancelled(gestureDescription)
-                        Log.w(TAG, "Slash gesture cancelled by system")
                     }
                 }, null)
 
-                // High speed delay between swipes (configurable: default 60ms - 100ms)
-                val delayMs = config.delayBetweenSwipesMs.coerceIn(20L, 300L)
+                // Precise delay between consecutive swipe bursts (10ms - 100ms)
+                val delayMs = config.delayBetweenSwipesMs.coerceIn(10L, 200L)
                 delay(delayMs)
             }
         }
@@ -161,130 +161,154 @@ class AutoTouchService : AccessibilityService() {
     }
 
     /**
-     * Computes dynamic swipe trajectories across the central arena bounds.
+     * Generates gesture strokes with STRICT Y-axis bounds (12% to 55% screen height).
      */
-    private fun generateNextSlashGesture(config: BotConfig): GestureDescription {
-        val boundsRatio = config.arenaBoundsRatio.coerceIn(0.40f, 0.95f)
-        val marginX = (screenWidth * (1f - boundsRatio) / 2f)
-        val marginY = (screenHeight * (1f - boundsRatio) / 2f)
+    private fun generatePatternGesture(config: BotConfig): GestureDescription {
+        val minY = screenHeight * 0.12f
+        val maxY = screenHeight * 0.55f
+        val minX = screenWidth * 0.05f
+        val maxX = screenWidth * 0.95f
 
-        val minX = marginX
-        val maxX = screenWidth - marginX
-        val minY = marginY
-        val maxY = screenHeight - marginY
+        val duration = config.swipeDurationMs.coerceIn(20L, 80L)
 
-        val slashLen = Random.nextDouble(
-            config.minSlashLength.toDouble(),
-            config.maxSlashLength.toDouble()
-        ).toFloat()
+        return when (config.pattern) {
+            SlashPattern.INFINITY_WAVE -> {
+                // Pattern 1: Continuous 16-segment connected looping infinity path (Lemniscate)
+                val centerX = screenWidth * 0.50f + Random.nextFloat() * 40f - 20f
+                val centerY = (minY + maxY) * 0.50f + Random.nextFloat() * 30f - 15f
+                val scaleX = (maxX - minX) * 0.42f
+                val scaleY = (maxY - minY) * 0.45f
 
-        val startX: Float
-        val startY: Float
-        val endX: Float
-        val endY: Float
+                val path = Path()
+                val totalSegments = 16
+                for (i in 0..totalSegments) {
+                    val t = (i.toFloat() / totalSegments) * 2.0 * PI
+                    // Lemniscate parametric: x = a*cos(t)/(1+sin^2(t)), y = b*sin(t)*cos(t)/(1+sin^2(t))
+                    val denom = (1.0 + sin(t) * sin(t)).toFloat()
+                    val px = (centerX + (scaleX * cos(t).toFloat()) / denom).coerceIn(minX, maxX)
+                    val py = (centerY + (scaleY * (sin(t) * cos(t)).toFloat()) / denom).coerceIn(minY, maxY)
 
-        when (config.pattern) {
-            SlashPattern.RANDOM_CHAOS -> {
-                // Random multi-directional diagonal, horizontal, or vertical slashes
-                val centerX = Random.nextDouble(minX.toDouble(), maxX.toDouble()).toFloat()
-                val centerY = Random.nextDouble(minY.toDouble(), maxY.toDouble()).toFloat()
-                val angle = Random.nextDouble(0.0, Math.PI * 2)
-
-                val half = slashLen / 2f
-                startX = (centerX - cos(angle) * half).toFloat().coerceIn(minX, maxX)
-                startY = (centerY - sin(angle) * half).toFloat().coerceIn(minY, maxY)
-                endX = (centerX + cos(angle) * half).toFloat().coerceIn(minX, maxX)
-                endY = (centerY + sin(angle) * half).toFloat().coerceIn(minY, maxY)
-            }
-
-            SlashPattern.CROSS_GRID -> {
-                // Alternating diagonal cross slashes (top-left to bottom-right, or bottom-left to top-right)
-                val isPositiveSlope = Random.nextBoolean()
-                val midX = Random.nextDouble(minX + 80.0, maxX - 80.0).toFloat()
-                val midY = Random.nextDouble(minY + 80.0, maxY - 80.0).toFloat()
-                val half = slashLen / 2f
-
-                if (isPositiveSlope) {
-                    startX = (midX - half * 0.7f).coerceIn(minX, maxX)
-                    startY = (midY + half * 0.7f).coerceIn(minY, maxY)
-                    endX = (midX + half * 0.7f).coerceIn(minX, maxX)
-                    endY = (midY - half * 0.7f).coerceIn(minY, maxY)
-                } else {
-                    startX = (midX - half * 0.7f).coerceIn(minX, maxX)
-                    startY = (midY - half * 0.7f).coerceIn(minY, maxY)
-                    endX = (midX + half * 0.7f).coerceIn(minX, maxX)
-                    endY = (midY + half * 0.7f).coerceIn(minY, maxY)
-                }
-            }
-
-            SlashPattern.DUAL_SWEEP -> {
-                // Fast wide horizontal sweeps across the fruit apex zone
-                val sweepY = Random.nextDouble(minY.toDouble(), maxY.toDouble()).toFloat()
-                val leftToRight = Random.nextBoolean()
-                val half = slashLen / 2f
-                val centerX = screenWidth / 2f
-
-                if (leftToRight) {
-                    startX = (centerX - half).coerceIn(minX, maxX)
-                    startY = (sweepY + Random.nextInt(-40, 40)).coerceIn(minY, maxY)
-                    endX = (centerX + half).coerceIn(minX, maxX)
-                    endY = (sweepY + Random.nextInt(-40, 40)).coerceIn(minY, maxY)
-                } else {
-                    startX = (centerX + half).coerceIn(minX, maxX)
-                    startY = (sweepY + Random.nextInt(-40, 40)).coerceIn(minY, maxY)
-                    endX = (centerX - half).coerceIn(minX, maxX)
-                    endY = (sweepY + Random.nextInt(-40, 40)).coerceIn(minY, maxY)
-                }
-            }
-
-            SlashPattern.WHIRLWIND -> {
-                // Multi-point circular slash path
-                val centerX = screenWidth / 2f + Random.nextInt(-100, 100)
-                val centerY = screenHeight / 2f + Random.nextInt(-150, 150)
-                val angleStart = Random.nextDouble(0.0, Math.PI * 2)
-                val radius = (slashLen / 2.5f).coerceIn(100f, 300f)
-
-                val path = Path().apply {
-                    val p0X = (centerX + cos(angleStart) * radius).toFloat().coerceIn(minX, maxX)
-                    val p0Y = (centerY + sin(angleStart) * radius).toFloat().coerceIn(minY, maxY)
-                    moveTo(p0X, p0Y)
-
-                    for (step in 1..3) {
-                        val ang = angleStart + step * (Math.PI / 2.0)
-                        val px = (centerX + cos(ang) * radius).toFloat().coerceIn(minX, maxX)
-                        val py = (centerY + sin(ang) * radius).toFloat().coerceIn(minY, maxY)
-                        lineTo(px, py)
+                    if (i == 0) {
+                        path.moveTo(px, py)
+                    } else {
+                        path.lineTo(px, py)
                     }
                 }
 
-                val stroke = GestureDescription.StrokeDescription(
-                    path,
-                    0L,
-                    config.swipeDurationMs.coerceIn(30L, 60L)
-                )
-                return GestureDescription.Builder().addStroke(stroke).build()
+                val stroke = GestureDescription.StrokeDescription(path, 0L, duration.coerceAtLeast(35L))
+                GestureDescription.Builder().addStroke(stroke).build()
+            }
+
+            SlashPattern.FULL_SWEEP -> {
+                // Pattern 2: Full Edge-to-Edge Horizontal Sweeps (X=5% to X=95%)
+                val isLeftToRight = Random.nextBoolean()
+                val y1 = Random.nextDouble(minY.toDouble(), maxY.toDouble()).toFloat()
+                val y2 = (y1 + Random.nextFloat() * 60f - 30f).coerceIn(minY, maxY)
+
+                val startX = if (isLeftToRight) minX else maxX
+                val endX = if (isLeftToRight) maxX else minX
+
+                val path = Path().apply {
+                    moveTo(startX, y1)
+                    lineTo(endX, y2)
+                }
+
+                val stroke = GestureDescription.StrokeDescription(path, 0L, duration)
+                GestureDescription.Builder().addStroke(stroke).build()
+            }
+
+            SlashPattern.Z_GRID -> {
+                // Pattern 3: Z-Grid Blitz (Continuous 3-point Z-shaped cuts spanning upper screen)
+                val isReverse = Random.nextBoolean()
+                val left = minX + Random.nextFloat() * 60f
+                val right = maxX - Random.nextFloat() * 60f
+                val topY = minY + Random.nextFloat() * 40f
+                val bottomY = maxY - Random.nextFloat() * 40f
+
+                val path = Path().apply {
+                    if (!isReverse) {
+                        // Top-left -> Top-right -> Bottom-left -> Bottom-right
+                        moveTo(left, topY)
+                        lineTo(right, topY + 20f)
+                        lineTo(left, bottomY - 20f)
+                        lineTo(right, bottomY)
+                    } else {
+                        // Top-right -> Top-left -> Bottom-right -> Bottom-left
+                        moveTo(right, topY)
+                        lineTo(left, topY + 20f)
+                        lineTo(right, bottomY - 20f)
+                        lineTo(left, bottomY)
+                    }
+                }
+
+                val stroke = GestureDescription.StrokeDescription(path, 0L, duration.coerceAtLeast(30L))
+                GestureDescription.Builder().addStroke(stroke).build()
+            }
+
+            SlashPattern.DOUBLE_CROSS -> {
+                // Pattern 4: Double Cross-Cut (Simultaneous intersecting diagonal strokes)
+                val midX = screenWidth * 0.50f + Random.nextFloat() * 80f - 40f
+                val midY = (minY + maxY) * 0.50f + Random.nextFloat() * 60f - 30f
+                val spreadX = (maxX - minX) * 0.38f
+                val spreadY = (maxY - minY) * 0.45f
+
+                // Stroke 1: Top-Left to Bottom-Right
+                val p1 = Path().apply {
+                    moveTo((midX - spreadX).coerceIn(minX, maxX), (midY - spreadY).coerceIn(minY, maxY))
+                    lineTo((midX + spreadX).coerceIn(minX, maxX), (midY + spreadY).coerceIn(minY, maxY))
+                }
+
+                // Stroke 2: Top-Right to Bottom-Left
+                val p2 = Path().apply {
+                    moveTo((midX + spreadX).coerceIn(minX, maxX), (midY - spreadY).coerceIn(minY, maxY))
+                    lineTo((midX - spreadX).coerceIn(minX, maxX), (midY + spreadY).coerceIn(minY, maxY))
+                }
+
+                val stroke1 = GestureDescription.StrokeDescription(p1, 0L, duration)
+                val stroke2 = GestureDescription.StrokeDescription(p2, 0L, duration)
+
+                GestureDescription.Builder()
+                    .addStroke(stroke1)
+                    .addStroke(stroke2)
+                    .build()
+            }
+
+            SlashPattern.WHIRLWIND -> {
+                // Pattern 5: Whirlwind Vortex (High-velocity rotating multi-point circular slash)
+                val centerX = screenWidth * 0.50f + Random.nextFloat() * 60f - 30f
+                val centerY = (minY + maxY) * 0.50f + Random.nextFloat() * 40f - 20f
+                val radiusX = (maxX - minX) * 0.32f
+                val radiusY = (maxY - minY) * 0.42f
+                val startAngle = Random.nextDouble(0.0, 2.0 * PI)
+
+                val path = Path()
+                val totalSteps = 8
+                for (step in 0..totalSteps) {
+                    val ang = startAngle + (step.toFloat() / totalSteps) * 2.0 * PI
+                    val px = (centerX + cos(ang).toFloat() * radiusX).coerceIn(minX, maxX)
+                    val py = (centerY + sin(ang).toFloat() * radiusY).coerceIn(minY, maxY)
+                    if (step == 0) {
+                        path.moveTo(px, py)
+                    } else {
+                        path.lineTo(px, py)
+                    }
+                }
+
+                val stroke = GestureDescription.StrokeDescription(path, 0L, duration.coerceAtLeast(30L))
+                GestureDescription.Builder().addStroke(stroke).build()
             }
         }
-
-        val path = Path().apply {
-            moveTo(startX, startY)
-            lineTo(endX, endY)
-        }
-
-        val duration = config.swipeDurationMs.coerceIn(25L, 60L)
-        val stroke = GestureDescription.StrokeDescription(path, 0L, duration)
-        return GestureDescription.Builder().addStroke(stroke).build()
     }
 
     /**
      * Dispatches a single manual test swipe.
      */
-    fun performSingleSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 40L) {
+    fun performSingleSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 35L) {
         val path = Path().apply {
             moveTo(startX, startY)
             lineTo(endX, endY)
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, max(25L, durationMs))
+        val stroke = GestureDescription.StrokeDescription(path, 0L, max(20L, durationMs))
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
         dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
