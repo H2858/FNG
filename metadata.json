@@ -1,6 +1,6 @@
 {
   "name": "Fruit Ninja Bot",
-  "description": "Native Android automation bot for Fruit Ninja with real-time screen detection, floating overlay controls, and accessibility slicing gestures.",
+  "description": "High-speed Fruit Ninja Auto-Splasher engine with continuous gesture execution, floating HUD overlay controls, and customizable slice trajectory patterns.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
