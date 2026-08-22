@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Fruit Ninja Bot</string>
+    <string name="accessibility_service_label">Fruit Ninja Auto Slicer</string>
+    <string name="accessibility_service_description">Enables automated high-speed gesture slicing and touch automation for Fruit Ninja.</string>
+    <string name="notification_channel_name">Bot Automation Service</string>
+    <string name="notification_channel_desc">Shows active status and quick controls for Fruit Ninja Bot.</string>
+</resources>
+
