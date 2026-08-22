@@ -12,7 +12,9 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -51,6 +53,7 @@ class FloatingControlService : Service() {
     private var layoutParams: WindowManager.LayoutParams? = null
 
     private var isExpanded = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
     private var stateObserverJob: Job? = null
@@ -68,14 +71,20 @@ class FloatingControlService : Service() {
         observeBotState()
         isRunning = true
         BotStateController.setFloatingOverlayActive(true)
-        BotStateController.addLog("Floating HUD overlay activated.")
+        BotStateController.addLog("Floating HUD overlay activated. Ready in Fruit Ninja.")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_OVERLAY) {
+            handleEmergencyStop()
             stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    private fun handleEmergencyStop() {
+        mainHandler.removeCallbacksAndMessages(null)
+        AutoTouchService.instance?.stopAutoSlash()
     }
 
     private fun createNotificationChannel() {
@@ -104,7 +113,7 @@ class FloatingControlService : Service() {
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Fruit Ninja Auto-Splasher")
-            .setContentText("HUD Overlay active. Tap to open dashboard.")
+            .setContentText("HUD Overlay active. Vol Down = Kill Switch.")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -216,7 +225,7 @@ class FloatingControlService : Service() {
     }
 
     /**
-     * Expanded Glassmorphic HUD Panel
+     * Expanded Glassmorphic HUD Panel with High-Priority Controls
      */
     private fun buildExpandedPanelView(): LinearLayout {
         val panelBackground = GradientDrawable().apply {
@@ -233,7 +242,7 @@ class FloatingControlService : Service() {
             elevation = dpToPx(16f)
             tag = "expanded_panel"
             layoutParams = LinearLayout.LayoutParams(
-                dpToPx(290f).toInt(),
+                dpToPx(300f).toInt(),
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
                 topMargin = dpToPx(6f).toInt()
@@ -274,11 +283,21 @@ class FloatingControlService : Service() {
             textSize = 12f
             setTextColor(Color.parseColor("#FF5252"))
             paint.isFakeBoldText = true
-            setPadding(0, dpToPx(6f).toInt(), 0, dpToPx(8f).toInt())
+            setPadding(0, dpToPx(6f).toInt(), 0, dpToPx(6f).toInt())
         }
         panel.addView(statusTv)
 
-        // Big Primary Toggle Button (START / STOP)
+        // Emergency Kill-Switch Note
+        val killNote = TextView(this).apply {
+            text = "🚨 Press [VOL DOWN] anytime for Instant Emergency Brake"
+            textSize = 10f
+            setTextColor(Color.parseColor("#FF8A80"))
+            paint.isFakeBoldText = true
+            setPadding(0, 0, 0, dpToPx(6f).toInt())
+        }
+        panel.addView(killNote)
+
+        // Big Primary Toggle Button (START / STOP) - High Priority Execution
         val toggleBtn = Button(this).apply {
             tag = "expanded_toggle_btn"
             text = "⚡ START AUTO-SPLASHER"
@@ -295,15 +314,17 @@ class FloatingControlService : Service() {
                 dpToPx(44f).toInt()
             )
             setOnClickListener {
-                val current = BotStateController.botRunState.value
-                val touch = AutoTouchService.instance
-                if (current == BotRunState.SLASHING) {
-                    touch?.stopAutoSlash()
-                } else {
-                    if (touch != null) {
-                        touch.startAutoSlash()
+                mainHandler.post {
+                    val current = BotStateController.botRunState.value
+                    val touch = AutoTouchService.instance
+                    if (current == BotRunState.SLASHING) {
+                        touch?.stopAutoSlash()
                     } else {
-                        BotStateController.addLog("Accessibility service not connected!")
+                        if (touch != null) {
+                            touch.startAutoSlash()
+                        } else {
+                            BotStateController.addLog("Accessibility service not connected!")
+                        }
                     }
                 }
             }
@@ -320,7 +341,7 @@ class FloatingControlService : Service() {
         }
         panel.addView(patternTitle)
 
-        // Horizontal Scrollable Chip Group for 5 Patterns
+        // Horizontal Scrollable Chip Group for 6 Patterns
         val scrollChips = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
         }
@@ -412,10 +433,46 @@ class FloatingControlService : Service() {
         }
         panel.addView(durationSeekBar)
 
+        // Auto-Restart Banana Toggle Row
+        val bananaRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dpToPx(4f).toInt(), 0, dpToPx(6f).toInt())
+        }
+
+        val bananaLabel = TextView(this).apply {
+            text = "🍌 Auto-Restart Banana (Play Again):"
+            textSize = 10.5f
+            setTextColor(Color.parseColor("#FFE082"))
+            paint.isFakeBoldText = true
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        bananaRow.addView(bananaLabel)
+
+        val bananaToggle = TextView(this).apply {
+            tag = "banana_toggle_btn"
+            val isEnabled = BotStateController.config.value.autoRestartBananaEnabled
+            text = if (isEnabled) "ON" else "OFF"
+            textSize = 11f
+            setTextColor(if (isEnabled) Color.parseColor("#00E676") else Color.parseColor("#FF5252"))
+            paint.isFakeBoldText = true
+            setPadding(dpToPx(8f).toInt(), dpToPx(2f).toInt(), dpToPx(8f).toInt(), dpToPx(2f).toInt())
+            setOnClickListener {
+                val cfg = BotStateController.config.value
+                val newEnabled = !cfg.autoRestartBananaEnabled
+                BotStateController.updateConfig(cfg.copy(autoRestartBananaEnabled = newEnabled))
+                text = if (newEnabled) "ON" else "OFF"
+                setTextColor(if (newEnabled) Color.parseColor("#00E676") else Color.parseColor("#FF5252"))
+                BotStateController.addLog("Auto-Restart Banana ${if (newEnabled) "ENABLED" else "DISABLED"}")
+            }
+        }
+        bananaRow.addView(bananaToggle)
+        panel.addView(bananaRow)
+
         // Bottom Dismiss / Full Dashboard Button
         val footerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dpToPx(6f).toInt(), 0, 0)
+            setPadding(0, dpToPx(4f).toInt(), 0, 0)
         }
 
         val openAppBtn = TextView(this).apply {
@@ -445,7 +502,7 @@ class FloatingControlService : Service() {
             paint.isFakeBoldText = true
             setPadding(dpToPx(8f).toInt(), dpToPx(4f).toInt(), dpToPx(4f).toInt(), dpToPx(4f).toInt())
             setOnClickListener {
-                AutoTouchService.instance?.stopAutoSlash()
+                handleEmergencyStop()
                 stopSelf()
             }
         }
@@ -578,14 +635,13 @@ class FloatingControlService : Service() {
             // Collect slash count & SPS
             launch {
                 BotStateController.slashCount.collectLatest { count ->
-                    val sps = BotStateController.slashesPerSecond.value
                     collapsedFabView?.findViewWithTag<TextView>("fab_stats")?.text = "$count Slashes"
                     updateStatusTexts()
                 }
             }
 
             launch {
-                BotStateController.slashesPerSecond.collectLatest { sps ->
+                BotStateController.slashesPerSecond.collectLatest {
                     updateStatusTexts()
                 }
             }
@@ -619,6 +675,7 @@ class FloatingControlService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        handleEmergencyStop()
         stateObserverJob?.cancel()
         BotStateController.setFloatingOverlayActive(false)
         BotStateController.addLog("Floating HUD overlay closed.")

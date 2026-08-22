@@ -5,11 +5,11 @@ import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.content.Intent
 import android.graphics.Path
-import android.graphics.PointF
 import android.os.Handler
 import android.os.Looper
 import android.util.DisplayMetrics
 import android.util.Log
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import com.aistudio.fruitninjabot.fnxbot.R
@@ -43,7 +43,9 @@ class AutoTouchService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
     private var slashingJob: Job? = null
+    private var bananaAutoRestartJob: Job? = null
     private val isSlashingActive = AtomicBoolean(false)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var screenWidth = 1080
     private var screenHeight = 1920
@@ -56,12 +58,32 @@ class AutoTouchService : AccessibilityService() {
         instance = this
         _isServiceConnected.value = true
         updateScreenDimensions()
-        BotStateController.addLog("AutoTouchService ready. Safe-zone gesture engine active.")
+        BotStateController.addLog("AutoTouchService connected. Emergency Volume-Down Brake armed.")
         Log.d(TAG, "AutoTouchService connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Unused - pure gesture dispatching
+        // Pure gesture dispatching engine
+    }
+
+    /**
+     * Hardware Emergency Kill-Switch:
+     * Intercepts VOLUME_DOWN button press to immediately halt all active slashing.
+     */
+    override fun onKeyEvent(event: KeyEvent?): Boolean {
+        if (event != null && event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                if (isSlashingActive.get()) {
+                    Log.w(TAG, "Hardware Emergency Brake triggered via VOLUME_DOWN")
+                    mainHandler.post {
+                        stopAutoSlash()
+                        BotStateController.addLog("🚨 EMERGENCY BRAKE: Volume Down pressed! Halting gestures.")
+                    }
+                    return true
+                }
+            }
+        }
+        return super.onKeyEvent(event)
     }
 
     override fun onInterrupt() {
@@ -72,6 +94,7 @@ class AutoTouchService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         stopAutoSlash()
+        mainHandler.removeCallbacksAndMessages(null)
         instance = null
         _isServiceConnected.value = false
         BotStateController.addLog("Accessibility service disconnected.")
@@ -80,6 +103,7 @@ class AutoTouchService : AccessibilityService() {
 
     override fun onDestroy() {
         stopAutoSlash()
+        mainHandler.removeCallbacksAndMessages(null)
         instance = null
         _isServiceConnected.value = false
         super.onDestroy()
@@ -101,7 +125,7 @@ class AutoTouchService : AccessibilityService() {
     }
 
     /**
-     * Starts continuous high-frequency auto slashing gestures based on active pattern.
+     * Starts continuous high-frequency auto slashing gestures & auto-restart banana loop.
      */
     fun startAutoSlash() {
         if (isSlashingActive.getAndSet(true)) {
@@ -113,6 +137,7 @@ class AutoTouchService : AccessibilityService() {
         windowStartTimestamp = System.currentTimeMillis()
         slashCountInWindow = 0
 
+        // 1. Primary Upper-Arena Slashing Loop
         slashingJob = serviceScope.launch {
             while (isActive && isSlashingActive.get()) {
                 val config = BotStateController.config.value
@@ -145,19 +170,62 @@ class AutoTouchService : AccessibilityService() {
                 delay(delayMs)
             }
         }
+
+        // 2. Auto-Restart Banana Slice (Play Again at X: 75%, Y: 80% every 3.5 seconds)
+        bananaAutoRestartJob = serviceScope.launch {
+            while (isActive && isSlashingActive.get()) {
+                val config = BotStateController.config.value
+                val interval = config.autoRestartBananaIntervalMs.coerceAtLeast(1500L)
+                delay(interval)
+
+                if (isActive && isSlashingActive.get() && config.autoRestartBananaEnabled) {
+                    dispatchBananaRestartSwipe()
+                }
+            }
+        }
     }
 
     /**
-     * Stops auto slashing gestures immediately.
+     * Stops auto slashing gestures immediately and clears all pending callbacks.
      */
     fun stopAutoSlash() {
         if (!isSlashingActive.getAndSet(false)) {
             return
         }
+        mainHandler.removeCallbacksAndMessages(null)
         slashingJob?.cancel()
         slashingJob = null
+        bananaAutoRestartJob?.cancel()
+        bananaAutoRestartJob = null
+
         BotStateController.setRunState(BotRunState.IDLE)
         BotStateController.setSlashesPerSecond(0f)
+    }
+
+    /**
+     * Injects a quick diagonal slice across the bottom-right Play Again Banana area (X: ~75%, Y: ~80%).
+     */
+    private fun dispatchBananaRestartSwipe() {
+        val startX = screenWidth * 0.70f + Random.nextFloat() * 20f - 10f
+        val startY = screenHeight * 0.83f + Random.nextFloat() * 20f - 10f
+        val endX = screenWidth * 0.82f + Random.nextFloat() * 20f - 10f
+        val endY = screenHeight * 0.77f + Random.nextFloat() * 20f - 10f
+
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+
+        val stroke = GestureDescription.StrokeDescription(path, 0L, 25L)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+        dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                super.onCompleted(gestureDescription)
+                BotStateController.incrementSlashCount(1)
+                BotStateController.addLog("🍌 Auto-Restart Banana sliced (Play Again zone).")
+            }
+        }, null)
     }
 
     /**
@@ -172,6 +240,37 @@ class AutoTouchService : AccessibilityService() {
         val duration = config.swipeDurationMs.coerceIn(20L, 80L)
 
         return when (config.pattern) {
+            SlashPattern.SPIRAL_WHIRLWIND -> {
+                // Pattern 6: Continuous expanding spiral loop starting from mid-screen expanding outward across upper bounds
+                val centerX = screenWidth * 0.50f + Random.nextFloat() * 40f - 20f
+                val centerY = (minY + maxY) * 0.50f + Random.nextFloat() * 30f - 15f
+                val maxRadiusX = (maxX - minX) * 0.44f
+                val maxRadiusY = (maxY - minY) * 0.46f
+
+                val startAngle = Random.nextDouble(0.0, 2.0 * PI)
+                val totalTurns = 2.2 // ~2 expanding revolutions
+                val totalSteps = 18
+                val path = Path()
+
+                for (step in 0..totalSteps) {
+                    val progress = step.toFloat() / totalSteps.toFloat()
+                    val currentAngle = startAngle + progress * totalTurns * 2.0 * PI
+                    // Expanding spiral radius factor (starts small, expands outwards)
+                    val rFactor = 0.15f + 0.85f * progress
+                    val px = (centerX + cos(currentAngle).toFloat() * maxRadiusX * rFactor).coerceIn(minX, maxX)
+                    val py = (centerY + sin(currentAngle).toFloat() * maxRadiusY * rFactor).coerceIn(minY, maxY)
+
+                    if (step == 0) {
+                        path.moveTo(px, py)
+                    } else {
+                        path.lineTo(px, py)
+                    }
+                }
+
+                val stroke = GestureDescription.StrokeDescription(path, 0L, duration.coerceAtLeast(35L))
+                GestureDescription.Builder().addStroke(stroke).build()
+            }
+
             SlashPattern.INFINITY_WAVE -> {
                 // Pattern 1: Continuous 16-segment connected looping infinity path (Lemniscate)
                 val centerX = screenWidth * 0.50f + Random.nextFloat() * 40f - 20f

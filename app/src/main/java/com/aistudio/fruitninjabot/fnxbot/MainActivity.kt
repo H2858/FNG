@@ -878,6 +878,30 @@ fun DojoArenaScreen(
                             style = Stroke(width = if (isSlashing) 6f else 3f)
                         )
                     }
+
+                    SlashPattern.SPIRAL_WHIRLWIND -> {
+                        val cx = w * 0.5f
+                        val cy = (minY + maxY) * 0.5f
+                        val maxRx = (maxX - minX) * 0.44f * pulse
+                        val maxRy = (maxY - minY) * 0.46f * pulse
+                        val path = Path()
+                        val totalSteps = 24
+
+                        for (step in 0..totalSteps) {
+                            val progress = step.toFloat() / totalSteps.toFloat()
+                            val ang = progress * 2.2 * 2.0 * PI
+                            val r = 0.15f + 0.85f * progress
+                            val px = cx + cos(ang).toFloat() * maxRx * r
+                            val py = cy + sin(ang).toFloat() * maxRy * r
+                            if (step == 0) path.moveTo(px, py) else path.lineTo(px, py)
+                        }
+
+                        drawPath(
+                            path = path,
+                            brush = Brush.linearGradient(listOf(Color(0xFFFF5252), Color(0xFFFFCC00), Color(0xFF00E676), Color(0xFF00E5FF))),
+                            style = Stroke(width = if (isSlashing) 6f else 3f)
+                        )
+                    }
                 }
             }
 
@@ -997,6 +1021,73 @@ fun ConfigScreen(
                             activeTrackColor = Color(0xFF00E5FF)
                         )
                     )
+                }
+            }
+        }
+
+        // Auto-Restart Banana Slice Card
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("🍌 Auto-Restart Banana Slice", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFFFCC00))
+                            Text("Periodically slices 'Play Again' banana zone (X:75%, Y:80%)", fontSize = 11.sp, color = Color(0xFFA0A8B8))
+                        }
+                        Button(
+                            onClick = { onConfigChange(config.copy(autoRestartBananaEnabled = !config.autoRestartBananaEnabled)) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (config.autoRestartBananaEnabled) Color(0xFF00E676) else Color(0xFF424A5E)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                if (config.autoRestartBananaEnabled) "ENABLED" else "DISABLED",
+                                color = if (config.autoRestartBananaEnabled) Color.Black else Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Hardware Emergency Kill-Switch Info Card
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF2B1414)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF5252)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = "Kill Switch",
+                        tint = Color(0xFFFF5252),
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text("🚨 HARDWARE EMERGENCY BRAKE", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFFF8A80))
+                        Text(
+                            "Pressing the physical [VOLUME DOWN] button instantly terminates all active gestures immediately.",
+                            fontSize = 11.sp,
+                            color = Color(0xFFFFCDD2)
+                        )
+                    }
                 }
             }
         }

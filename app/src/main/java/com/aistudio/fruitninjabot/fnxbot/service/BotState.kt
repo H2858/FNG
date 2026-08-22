@@ -35,16 +35,23 @@ enum class SlashPattern(val label: String, val shortName: String, val descriptio
         "Whirlwind Vortex",
         "Vortex",
         "High-velocity rotating multi-point circular slashes in mid-upper arena"
+    ),
+    SPIRAL_WHIRLWIND(
+        "Spiral Whirlwind",
+        "Spiral",
+        "Continuous expanding spiral loop starting from mid-screen expanding outward across upper bounds"
     )
 }
 
 data class BotConfig(
     val swipeDurationMs: Long = 35L,
     val delayBetweenSwipesMs: Long = 40L,
-    val pattern: SlashPattern = SlashPattern.INFINITY_WAVE,
+    val pattern: SlashPattern = SlashPattern.SPIRAL_WHIRLWIND,
     val arenaBoundsRatio: Float = 0.70f,
     val minSlashLength: Float = 280f,
-    val maxSlashLength: Float = 640f
+    val maxSlashLength: Float = 640f,
+    val autoRestartBananaEnabled: Boolean = true,
+    val autoRestartBananaIntervalMs: Long = 3500L
 )
 
 /**
